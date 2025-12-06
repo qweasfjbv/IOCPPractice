@@ -16,7 +16,6 @@ struct OverlappedEx
 	WSAOVERLAPPED m_wsaOverlapped;
 	SOCKET m_socketClient;
 	WSABUF m_wsaBuf;
-	char m_szBuf[MAX_SOCKBUF];
 	IOOperation m_eOperation;
 };
 
@@ -25,6 +24,8 @@ struct ClientInfo
 	SOCKET m_socketClient;
 	OverlappedEx m_recvOv;
 	OverlappedEx m_sendOv;
+	char m_recvBuf[MAX_SOCKBUF];
+	char m_sendBuf[MAX_SOCKBUF];
 	
 	ClientInfo() 
 	{
