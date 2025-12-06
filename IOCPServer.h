@@ -117,6 +117,12 @@ public:
 		return &mClientInfos[sessionIndex];
 	}
 
+	bool SendMsg(const UINT32 sessionIndex, const UINT32 dataSize, char* pData)
+	{
+		auto pClientInfo = GetClientInfo(sessionIndex);
+		return pClientInfo->SendMsg(dataSize, pData);
+	}
+
 protected:
 	virtual void OnConnected(const UINT32 clientIndex) { }
 	virtual void OnClose(const UINT32 clientIndex) { }
@@ -166,11 +172,6 @@ private:
 		return nullptr;
 	}
 
-	bool SendMsg(const UINT32 sessionIndex, const UINT32 dataSize, char* pData)
-	{
-		auto pClientInfo = GetClientInfo(sessionIndex);
-		return pClientInfo->SendMsg(dataSize, pData);
-	}
 
 	void WorkerThread()
 	{
