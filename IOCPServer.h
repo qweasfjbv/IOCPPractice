@@ -7,14 +7,15 @@
 #include <vector>
 
 #include "Logger.h"
-#include "Define.h";
+#include "Define.h"
+#include "ClientInfo.h"
 
-class IOCompletionPort
+class IOCPServer
 {
 public:
-	IOCompletionPort(void) {}
+	IOCPServer(void) {}
 	
-	~IOCompletionPort(void) 
+	~IOCPServer(void) 
 	{
 		WSACleanup();
 	}
@@ -111,12 +112,23 @@ public:
 		}
 	}
 
+	ClientInfo* GetClientInfo(const UINT32 sessionIndex)
+	{
+		return &mClientInfos[sessionIndex];
+	}
+
+protected:
+	virtual void OnConnected(const UINT32 clientIndex) { }
+	virtual void OnClose(const UINT32 clientIndex) { }
+	virtual void OnReceive(const UINT32 clientIndex, const UINT32 size, char* pData) { }
+
 private:
 	void CreateClient(const UINT32 maxClientCount) 
 	{
 		for (UINT32 i = 0; i < maxClientCount; i++) 
 		{
 			mClientInfos.emplace_back();
+			mClientInfos[i].m_index = i;
 		}
 	}
 
@@ -154,74 +166,10 @@ private:
 		return nullptr;
 	}
 
-	// Bind CP Instance with CompletionKey
-	bool BindIOCompletionPort(ClientInfo* pClientInfo) 
+	bool SendMsg(const UINT32 sessionIndex, const UINT32 dataSize, char* pData)
 	{
-		auto hIOCP = CreateIoCompletionPort((HANDLE)pClientInfo->m_socketClient
-											, mIOCPHandle
-											, (ULONG_PTR)(pClientInfo), 0);
-
-		if (NULL == hIOCP || mIOCPHandle != hIOCP) 
-		{
-			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", GetLastError()));
-			return false;
-		}
-
-		return true;
-	}
-
-	bool BindRecv(ClientInfo* pClientInfo) 
-	{
-		DWORD flag = 0;
-		DWORD recvNumBytes = 0;
-
-		pClientInfo->m_recvOv.m_wsaBuf.len = MAX_SOCKBUF;
-		pClientInfo->m_recvOv.m_wsaBuf.buf = pClientInfo->m_recvBuf;
-		pClientInfo->m_recvOv.m_eOperation = IOOperation::RECV;
-
-		int nRet = WSARecv(pClientInfo->m_socketClient,
-						   &(pClientInfo->m_recvOv.m_wsaBuf),
-						   1,
-						   &recvNumBytes,
-						   &flag,
-						   (LPWSAOVERLAPPED)&(pClientInfo->m_recvOv),
-						   NULL);
-		
-		if (nRet == SOCKET_ERROR && (WSAGetLastError() != ERROR_IO_PENDING))
-		{
-			LOG_ERROR(std::format("WSARecv() Failed. : {}", WSAGetLastError()));
-			return false;
-		}
-
-		return true;
-	}
-
-	bool SendMsg(ClientInfo* pClientInfo, char* pMsg, int nLen) 
-	{
-		DWORD recvNumBytes = 0;
-
-		CopyMemory(pClientInfo->m_sendBuf, pMsg, nLen);
-		pClientInfo->m_sendBuf[nLen] = NULL;
-
-		pClientInfo->m_sendOv.m_wsaBuf.len = nLen;
-		pClientInfo->m_sendOv.m_wsaBuf.buf = pClientInfo->m_sendBuf;
-		pClientInfo->m_sendOv.m_eOperation = IOOperation::SEND;
-
-		int nRet = WSASend(pClientInfo->m_socketClient,
-						   &(pClientInfo->m_sendOv.m_wsaBuf),
-						   1,
-						   &recvNumBytes,
-						   0,
-						   (LPWSAOVERLAPPED) & (pClientInfo->m_sendOv),
-						   NULL);
-
-		if (nRet == SOCKET_ERROR && (WSAGetLastError() != ERROR_IO_PENDING)) 
-		{
-			LOG_ERROR(std::format("WSASend() Failed. : {}", WSAGetLastError()));
-			return false;
-		}
-
-		return true;
+		auto pClientInfo = GetClientInfo(sessionIndex);
+		return pClientInfo->SendMsg(dataSize, pData);
 	}
 
 	void WorkerThread()
@@ -262,12 +210,8 @@ private:
 
 			if (IOOperation::RECV == pOverlappedEx->m_eOperation)
 			{
-				pClientInfo->m_recvBuf[ioSize] = NULL;
-				LOG_INFO(std::format("RECV bytes : {}, msg : {}", ioSize, pClientInfo->m_recvBuf));
-
-				// Echo to Client
-				SendMsg(pClientInfo, pClientInfo->m_recvBuf, ioSize);
-				BindRecv(pClientInfo);
+				OnReceive(pClientInfo->m_index, ioSize, pClientInfo->m_recvBuf);
+				pClientInfo->BindRecv();
 			}
 			else if (IOOperation::SEND == pOverlappedEx->m_eOperation) 
 			{
@@ -296,50 +240,33 @@ private:
 			}
 
 			// Wait until client connect request
-			pClientInfo->m_socketClient = accept(mListenSocket, (SOCKADDR*)&clientAddr, &addrLen);
-			if (INVALID_SOCKET == pClientInfo->m_socketClient) 
+			auto newSocket = accept(mListenSocket, (SOCKADDR*)&clientAddr, &addrLen);
+			if (INVALID_SOCKET == newSocket) 
 			{
 				continue;
 			}
 
-			bool bRet = BindIOCompletionPort(pClientInfo);
-			if (false == bRet) 
+			if (false == pClientInfo->OnConnect(mIOCPHandle, newSocket))
 			{
+				pClientInfo->Close(true);
 				return;
 			}
 
-			bRet = BindRecv(pClientInfo);
-			if (false == bRet) 
-			{
-				return;
-			}
+			// char clientIP[32] = { 0, };
+			// Client's IPv4 -> string (for Debug)
+			// inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIP, 32 - 1);
 
-			char clientIP[32] = { 0, };
-			inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIP, 32 - 1);
-			LOG_INFO(std::format("클라이언트 접속 : IP{} SOCKET({})", clientIP, (int)pClientInfo->m_socketClient));
-
+			OnConnected(pClientInfo->m_index);
 			mClientCnt++;
 		}
 	}
 
 	void CloseSocket(ClientInfo* pClientInfo, bool isForce = false) 
 	{
-		struct linger stLinger = { 0, 0 };
-
-		// hard close
-		if (true == isForce) 
-		{
-			stLinger.l_onoff = 1;
-		}
-
-		shutdown(pClientInfo->m_socketClient, SD_BOTH);
-		
-		setsockopt(pClientInfo->m_socketClient, SOL_SOCKET, SO_LINGER, (char*)&stLinger, sizeof(stLinger));
-
-		closesocket(pClientInfo->m_socketClient);
-
-		pClientInfo->m_socketClient = INVALID_SOCKET;
+		OnClose(pClientInfo->m_index);
+		pClientInfo->Close(isForce);
 	}
+
 
 private:
 	std::vector<ClientInfo> mClientInfos;
@@ -358,6 +285,5 @@ private:
 
 	bool mIsAccepterRun = true;
 
-	char mScoketBuf[1024] = { 0, };
-
+	char mSocketBuf[1024] = { 0, };
 };

@@ -129,10 +129,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Define.h" />
-    <ClInclude Include="IOCompletionPort.h" />
+    <ClInclude Include="IOCPServer.h" />
     <ClInclude Include="Logger.h" />
+    <ClInclude Include="Packet.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="ClientInfo.h" />
+    <ClCompile Include="EchoServer.h" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

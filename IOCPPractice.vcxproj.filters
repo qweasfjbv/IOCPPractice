@@ -13,21 +13,36 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="헤더 파일\ServerNetwork">
+      <UniqueIdentifier>{e9957d06-22bc-43c1-8f3b-2def28d4b3bf}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="헤더 파일\Common">
+      <UniqueIdentifier>{c19f3a90-8846-4493-8205-643389280e14}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="IOCompletionPort.h">
-      <Filter>헤더 파일</Filter>
+    <ClInclude Include="IOCPServer.h">
+      <Filter>헤더 파일\ServerNetwork</Filter>
     </ClInclude>
     <ClInclude Include="Define.h">
-      <Filter>헤더 파일</Filter>
+      <Filter>헤더 파일\ServerNetwork</Filter>
     </ClInclude>
     <ClInclude Include="Logger.h">
-      <Filter>헤더 파일</Filter>
+      <Filter>헤더 파일\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Packet.h">
+      <Filter>헤더 파일\ServerNetwork</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
       <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="EchoServer.h">
+      <Filter>헤더 파일</Filter>
+    </ClCompile>
+    <ClCompile Include="ClientInfo.h">
+      <Filter>헤더 파일\ServerNetwork</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
