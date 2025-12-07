@@ -47,7 +47,8 @@ protected:
 
 	void OnReceive(const UINT32 clientIndex, const UINT32 size, char* data) override
 	{
-		LOG_INFO(std::format("OnReceive : Index({})", clientIndex));
+		data[size] = NULL;
+		LOG_INFO(std::format("OnReceive - Index({}) : {}", clientIndex, data));
 
 		// void Set(UINT32 sessionIndex, UINT32 dataSize, char* data)
 		PacketData packet;

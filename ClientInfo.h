@@ -1,9 +1,8 @@
 #pragma once
 
+#include <mutex>
 #include "Define.h"
 #include "Logger.h"
-
-#define MAX_SOCKBUF 1024
 
 class ClientInfo
 {
@@ -12,8 +11,14 @@ public:
 	SOCKET m_socketClient;
 	OverlappedEx m_recvOv;
 	OverlappedEx m_sendOv;
+
 	char m_recvBuf[MAX_SOCKBUF];
-	char m_sendBuf[MAX_SOCKBUF];
+
+	std::mutex m_sendLock;
+	bool m_isSending = false;
+	UINT64 m_sendPos = 0;
+	char m_sendBuf[MAX_SOCK_SENDBUF];
+	char m_sendingBuf[MAX_SOCK_SENDBUF];
 
 	ClientInfo()
 	{
@@ -21,6 +26,8 @@ public:
 		ZeroMemory(&m_sendOv, sizeof(OverlappedEx));
 		m_socketClient = INVALID_SOCKET;
 	}
+
+	bool IsConnected() { return m_socketClient != INVALID_SOCKET; }
 
 	bool OnConnect(HANDLE iocpHandle, SOCKET clientSocket)
 	{
@@ -85,15 +92,40 @@ public:
 
 	bool SendMsg(UINT32 dataSize, char* pData)
 	{
-		DWORD recvNumBytes = 0;
+		std::lock_guard<std::mutex> guard(m_sendLock);
+		
+		// Exception
+		if (m_sendPos + dataSize > MAX_SOCK_SENDBUF)
+		{
+			m_sendPos = 0;
+		}
 
-		CopyMemory(m_sendBuf, pData, dataSize);
-		m_sendBuf[dataSize] = NULL;
+		auto sendBuf = &m_sendBuf[m_sendPos];
 
-		m_sendOv.m_wsaBuf.len = dataSize;
-		m_sendOv.m_wsaBuf.buf = m_sendBuf;
+		CopyMemory(sendBuf, pData, dataSize);
+		m_sendPos += dataSize;
+
+		return true;
+	}
+
+	bool SendIO()
+	{
+		if (m_sendPos <= 0 || m_isSending)
+		{
+			return true;
+		}
+
+		std::lock_guard<std::mutex> guard(m_sendLock);
+
+		m_isSending = true;
+
+		CopyMemory(m_sendingBuf, &m_sendBuf[0], m_sendPos);
+
+		m_sendOv.m_wsaBuf.len = m_sendPos;
+		m_sendOv.m_wsaBuf.buf = &m_sendingBuf[0];
 		m_sendOv.m_eOperation = IOOperation::SEND;
 
+		DWORD recvNumBytes = 0;
 		int nRet = WSASend(m_socketClient,
 						   &(m_sendOv.m_wsaBuf),
 						   1,
@@ -108,6 +140,14 @@ public:
 			return false;
 		}
 
+		m_sendPos = 0;
 		return true;
+	}
+
+	void SendComplete(const UINT32 dataSize)
+	{
+		m_isSending = false;
+		m_sendBuf[dataSize] = NULL;
+		LOG_INFO(std::format("Send ({}) : {}", dataSize, m_sendBuf));
 	}
 };

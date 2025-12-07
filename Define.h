@@ -2,6 +2,8 @@
 
 #include <WinSock2.h>
 
+#define MAX_SOCKBUF 1024
+#define MAX_SOCK_SENDBUF 4096
 #define MAX_WORKERTHREAD 4
 
 enum class IOOperation

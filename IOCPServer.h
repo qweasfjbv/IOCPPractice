@@ -14,18 +14,18 @@ class IOCPServer
 {
 public:
 	IOCPServer(void) {}
-	
-	~IOCPServer(void) 
+
+	~IOCPServer(void)
 	{
 		WSACleanup();
 	}
 
-	bool InitSocket() 
+	bool InitSocket()
 	{
 		WSADATA wsaData;
 
 		int nRet = WSAStartup(MAKEWORD(2, 2), &wsaData);
-		if (0 != nRet) 
+		if (0 != nRet)
 		{
 			LOG_ERROR(std::format("WSAStartup Failed. : {}", WSAGetLastError()));
 			return false;
@@ -33,7 +33,7 @@ public:
 
 		mListenSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, NULL, WSA_FLAG_OVERLAPPED);
 
-		if (INVALID_SOCKET == mListenSocket) 
+		if (INVALID_SOCKET == mListenSocket)
 		{
 			LOG_ERROR(std::format("WSASocket Failed. : {}", WSAGetLastError()));
 			return false;
@@ -43,7 +43,7 @@ public:
 		return true;
 	}
 
-	bool BindandListen(int nBindPort) 
+	bool BindandListen(int nBindPort)
 	{
 		SOCKADDR_IN serverAddr;
 		serverAddr.sin_family = AF_INET;
@@ -51,7 +51,7 @@ public:
 		serverAddr.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
 
 		int nRet = bind(mListenSocket, (SOCKADDR*)&serverAddr, sizeof(SOCKADDR_IN));
-		if (0 != nRet) 
+		if (0 != nRet)
 		{
 			LOG_ERROR(std::format("Bind Failed. : {}", WSAGetLastError()));
 			return false;
@@ -59,7 +59,7 @@ public:
 
 		// HACK - Backlog : 5
 		nRet = listen(mListenSocket, 5);
-		if (0 != nRet) 
+		if (0 != nRet)
 		{
 			LOG_ERROR(std::format("Listen Failed. : {}", WSAGetLastError()));
 			return false;
@@ -69,12 +69,12 @@ public:
 		return true;
 	}
 
-	bool StartServer(const UINT32 maxClientCount) 
+	bool StartServer(const UINT32 maxClientCount)
 	{
 		CreateClient(maxClientCount);
 
 		mIOCPHandle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, MAX_WORKERTHREAD);
-		if (NULL == mIOCPHandle) 
+		if (NULL == mIOCPHandle)
 		{
 			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", WSAGetLastError()));
 			return false;
@@ -86,18 +86,21 @@ public:
 		bRet = CreateAccepterThread();
 		if (!bRet) return false;
 
+		bRet = CreateSenderThread();
+		if (!bRet) return false;
+
 		LOG_INFO("Start Server!");
 		return true;
 	}
 
-	void DestroyThread() 
+	void DestroyThread()
 	{
 		mIsWorkerRun = false;
 		CloseHandle(mIOCPHandle);
-		
-		for (auto& th : mIOWorkerThreads) 
+
+		for (auto& th : mIOWorkerThreads)
 		{
-			if (th.joinable()) 
+			if (th.joinable())
 			{
 				th.join();
 			}
@@ -106,7 +109,7 @@ public:
 		mIsAccepterRun = false;
 		closesocket(mListenSocket);
 
-		if (mAccepterThread.joinable()) 
+		if (mAccepterThread.joinable())
 		{
 			mAccepterThread.join();
 		}
@@ -114,7 +117,7 @@ public:
 
 	ClientInfo* GetClientInfo(const UINT32 sessionIndex)
 	{
-		return &mClientInfos[sessionIndex];
+		return mClientInfos[sessionIndex];
 	}
 
 	bool SendMsg(const UINT32 sessionIndex, const UINT32 dataSize, char* pData)
@@ -124,25 +127,27 @@ public:
 	}
 
 protected:
-	virtual void OnConnected(const UINT32 clientIndex) { }
-	virtual void OnClose(const UINT32 clientIndex) { }
-	virtual void OnReceive(const UINT32 clientIndex, const UINT32 size, char* pData) { }
+	virtual void OnConnected(const UINT32 clientIndex) {}
+	virtual void OnClose(const UINT32 clientIndex) {}
+	virtual void OnReceive(const UINT32 clientIndex, const UINT32 size, char* pData) {}
 
 private:
-	void CreateClient(const UINT32 maxClientCount) 
+	void CreateClient(const UINT32 maxClientCount)
 	{
-		for (UINT32 i = 0; i < maxClientCount; i++) 
+		for (UINT32 i = 0; i < maxClientCount; i++)
 		{
-			mClientInfos.emplace_back();
-			mClientInfos[i].m_index = i;
+			auto client = new ClientInfo();
+			client->m_index = i;
+			mClientInfos.push_back(client);
 		}
 	}
 
-	bool CreateWorkerThread() 
+	bool CreateWorkerThread()
 	{
 		unsigned int threadId = 0;
 
-		for (int i = 0; i < MAX_WORKERTHREAD; i++) 
+		mIsWorkerRun = true;
+		for (int i = 0; i < MAX_WORKERTHREAD; i++)
 		{
 			mIOWorkerThreads.emplace_back([this]() { WorkerThread(); });
 		}
@@ -151,21 +156,31 @@ private:
 		return true;
 	}
 
-	bool CreateAccepterThread() 
+	bool CreateAccepterThread()
 	{
-		mAccepterThread = std::thread([this]() {AccepterThread(); });
+		mIsAccepterRun = true;
+		mAccepterThread = std::thread([this]() { AccepterThread(); });
 
 		LOG_INFO("Start AccepterThread...");
 		return true;
 	}
 
-	ClientInfo* GetEmptyClientInfo() 
+	bool CreateSenderThread()
 	{
-		for (auto& client : mClientInfos) 
+		mIsSenderRun = true;
+		mSenderThread = std::thread([this]() { SendThread(); });
+
+		LOG_INFO("Start SenderThread...");
+		return true;
+	}
+
+	ClientInfo* GetEmptyClientInfo()
+	{
+		for (auto client : mClientInfos)
 		{
-			if (INVALID_SOCKET == client.m_socketClient) 
+			if (INVALID_SOCKET == client->m_socketClient)
 			{
-				return &client;
+				return client;
 			}
 		}
 
@@ -180,7 +195,7 @@ private:
 		DWORD ioSize = 0;
 		LPOVERLAPPED lpOverlapped = NULL;
 
-		while (mIsWorkerRun) 
+		while (mIsWorkerRun)
 		{
 			isSuccess = GetQueuedCompletionStatus(mIOCPHandle,
 												  &ioSize,
@@ -188,19 +203,19 @@ private:
 												  &lpOverlapped,
 												  INFINITE);
 
-			if (TRUE == isSuccess && 0 == ioSize && NULL == lpOverlapped) 
+			if (TRUE == isSuccess && 0 == ioSize && NULL == lpOverlapped)
 			{
 				mIsWorkerRun = false;
 				continue;
 			}
 
-			if (NULL == lpOverlapped) 
+			if (NULL == lpOverlapped)
 			{
 				continue;
 			}
 
 			// If client disconnects
-			if (FALSE == isSuccess || (0 == ioSize && TRUE == isSuccess)) 
+			if (FALSE == isSuccess || (0 == ioSize && TRUE == isSuccess))
 			{
 				LOG_WARNING(std::format("socket({}) disconnected.", (int)pClientInfo->m_socketClient));
 				CloseSocket(pClientInfo);
@@ -214,27 +229,27 @@ private:
 				OnReceive(pClientInfo->m_index, ioSize, pClientInfo->m_recvBuf);
 				pClientInfo->BindRecv();
 			}
-			else if (IOOperation::SEND == pOverlappedEx->m_eOperation) 
+			else if (IOOperation::SEND == pOverlappedEx->m_eOperation)
 			{
-				LOG_INFO(std::format("SEND bytes : {}, msg : {}", ioSize, pClientInfo->m_sendBuf));
+				pClientInfo->SendComplete(ioSize);
 			}
 			// Exceptions
-			else 
+			else
 			{
 				LOG_WARNING(std::format("Exception in socket({})", (int)pClientInfo->m_socketClient));
 			}
 		}
 	}
 
-	void AccepterThread() 
+	void AccepterThread()
 	{
 		SOCKADDR_IN clientAddr;
 		int addrLen = sizeof(SOCKADDR_IN);
 
-		while (mIsAccepterRun) 
+		while (mIsAccepterRun)
 		{
 			ClientInfo* pClientInfo = GetEmptyClientInfo();
-			if (NULL == pClientInfo) 
+			if (NULL == pClientInfo)
 			{
 				LOG_ERROR("Client Full");
 				return;
@@ -242,7 +257,7 @@ private:
 
 			// Wait until client connect request
 			auto newSocket = accept(mListenSocket, (SOCKADDR*)&clientAddr, &addrLen);
-			if (INVALID_SOCKET == newSocket) 
+			if (INVALID_SOCKET == newSocket)
 			{
 				continue;
 			}
@@ -262,7 +277,25 @@ private:
 		}
 	}
 
-	void CloseSocket(ClientInfo* pClientInfo, bool isForce = false) 
+	void SendThread()
+	{
+		while (mIsSenderRun)
+		{
+			for (auto client : mClientInfos)
+			{
+				if (!client->IsConnected())
+				{
+					continue;
+				}
+
+				client->SendIO();
+			}
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(8));
+		}
+	}
+
+	void CloseSocket(ClientInfo* pClientInfo, bool isForce = false)
 	{
 		OnClose(pClientInfo->m_index);
 		pClientInfo->Close(isForce);
@@ -270,8 +303,8 @@ private:
 
 
 private:
-	std::vector<ClientInfo> mClientInfos;
-	
+	std::vector<ClientInfo*> mClientInfos;
+
 	SOCKET mListenSocket = INVALID_SOCKET;
 
 	int mClientCnt = 0;
@@ -280,11 +313,15 @@ private:
 
 	std::thread mAccepterThread;
 
+	std::thread mSenderThread;
+
 	HANDLE mIOCPHandle = INVALID_HANDLE_VALUE;
 
-	bool mIsWorkerRun = true;
+	bool mIsWorkerRun = false;
 
-	bool mIsAccepterRun = true;
+	bool mIsAccepterRun = false;
+
+	bool mIsSenderRun = false;
 
 	char mSocketBuf[1024] = { 0, };
 };
