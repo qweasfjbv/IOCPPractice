@@ -86,8 +86,8 @@ public:
 		bRet = CreateAccepterThread();
 		if (!bRet) return false;
 
-		bRet = CreateSenderThread();
-		if (!bRet) return false;
+		// bRet = CreateSenderThread();
+		// if (!bRet) return false;
 
 		LOG_INFO("Start Server!");
 		return true;

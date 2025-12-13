@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mutex>
+#include <queue>
 #include "Define.h"
 #include "Logger.h"
 
@@ -15,10 +16,7 @@ public:
 	char m_recvBuf[MAX_SOCKBUF];
 
 	std::mutex m_sendLock;
-	bool m_isSending = false;
-	UINT64 m_sendPos = 0;
-	char m_sendBuf[MAX_SOCK_SENDBUF];
-	char m_sendingBuf[MAX_SOCK_SENDBUF];
+	std::queue<OverlappedEx*> m_sendDataQueue;
 
 	ClientInfo()
 	{
@@ -92,62 +90,59 @@ public:
 
 	bool SendMsg(UINT32 dataSize, char* pData)
 	{
+		auto sendOverlappedEx = new OverlappedEx;
+		ZeroMemory(sendOverlappedEx, sizeof(OverlappedEx));
+		sendOverlappedEx->m_wsaBuf.len = dataSize;
+		sendOverlappedEx->m_wsaBuf.buf = new char[dataSize];
+		CopyMemory(sendOverlappedEx->m_wsaBuf.buf, pData, dataSize);
+		sendOverlappedEx->m_eOperation = IOOperation::SEND;
+
 		std::lock_guard<std::mutex> guard(m_sendLock);
 		
-		// Exception
-		if (m_sendPos + dataSize > MAX_SOCK_SENDBUF)
+		m_sendDataQueue.push(sendOverlappedEx);
+
+		if (m_sendDataQueue.size() == 1)
 		{
-			m_sendPos = 0;
+			SendIO();
 		}
-
-		auto sendBuf = &m_sendBuf[m_sendPos];
-
-		CopyMemory(sendBuf, pData, dataSize);
-		m_sendPos += dataSize;
 
 		return true;
 	}
 
 	bool SendIO()
 	{
-		if (m_sendPos <= 0 || m_isSending)
-		{
-			return true;
-		}
+		auto sendOverlappedEx = m_sendDataQueue.front();
 
-		std::lock_guard<std::mutex> guard(m_sendLock);
-
-		m_isSending = true;
-
-		CopyMemory(m_sendingBuf, &m_sendBuf[0], m_sendPos);
-
-		m_sendOv.m_wsaBuf.len = m_sendPos;
-		m_sendOv.m_wsaBuf.buf = &m_sendingBuf[0];
-		m_sendOv.m_eOperation = IOOperation::SEND;
-
-		DWORD recvNumBytes = 0;
+		DWORD dwRecvNumBytes = 0;
 		int nRet = WSASend(m_socketClient,
-						   &(m_sendOv.m_wsaBuf),
+						   &(sendOverlappedEx->m_wsaBuf),
 						   1,
-						   &recvNumBytes,
+						   &dwRecvNumBytes,
 						   0,
-						   (LPWSAOVERLAPPED) & (m_sendOv),
+						   (LPWSAOVERLAPPED)sendOverlappedEx,
 						   NULL);
 
 		if (nRet == SOCKET_ERROR && (WSAGetLastError() != ERROR_IO_PENDING))
 		{
-			LOG_ERROR(std::format("WSASend() Failed. : {}", WSAGetLastError()));
+			printf("WSASend()함수 실패 : %d\n", WSAGetLastError());
 			return false;
 		}
 
-		m_sendPos = 0;
 		return true;
 	}
 
 	void SendComplete(const UINT32 dataSize)
 	{
-		m_isSending = false;
-		m_sendBuf[dataSize] = NULL;
-		LOG_INFO(std::format("Send ({}) : {}", dataSize, m_sendBuf));
+		std::lock_guard<std::mutex> guard(m_sendLock);
+
+		delete[] m_sendDataQueue.front()->m_wsaBuf.buf;
+		delete m_sendDataQueue.front();
+
+		m_sendDataQueue.pop();
+
+		if (!m_sendDataQueue.empty())
+		{
+			SendIO();
+		}
 	}
 };
