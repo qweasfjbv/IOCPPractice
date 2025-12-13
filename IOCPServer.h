@@ -39,6 +39,21 @@ public:
 			return false;
 		}
 
+		GUID guidAcceptEx = WSAID_ACCEPTEX;
+		DWORD bytes = 0;
+
+		WSAIoctl(
+			mListenSocket,
+			SIO_GET_EXTENSION_FUNCTION_POINTER,
+			&guidAcceptEx,
+			sizeof(guidAcceptEx),
+			&m_lpfnAcceptEx,
+			sizeof(m_lpfnAcceptEx),
+			&bytes,
+			nullptr,
+			nullptr
+		);
+
 		LOG_INFO("Init Socket Success!");
 		return true;
 	}
@@ -136,7 +151,7 @@ private:
 	{
 		for (UINT32 i = 0; i < maxClientCount; i++)
 		{
-			auto client = new ClientInfo();
+			auto client = new ClientInfo(m_lpfnAcceptEx);
 			client->m_index = i;
 			mClientInfos.push_back(client);
 		}
@@ -224,7 +239,21 @@ private:
 
 			OverlappedEx* pOverlappedEx = (OverlappedEx*)lpOverlapped;
 
-			if (IOOperation::RECV == pOverlappedEx->m_eOperation)
+			if (IOOperation::ACCEPT == pOverlappedEx->m_eOperation)
+			{
+				pClientInfo = GetClientInfo(pOverlappedEx->m_sessionIndex);
+				if (pClientInfo->AcceptCompletion())
+				{
+					++mClientCnt;
+
+					OnConnected(pClientInfo->m_index);
+				}
+				else
+				{
+					CloseSocket(pClientInfo, true);
+				}
+			}
+			else if (IOOperation::RECV == pOverlappedEx->m_eOperation)
 			{
 				OnReceive(pClientInfo->m_index, ioSize, pClientInfo->m_recvBuf);
 				pClientInfo->BindRecv();
@@ -248,32 +277,23 @@ private:
 
 		while (mIsAccepterRun)
 		{
-			ClientInfo* pClientInfo = GetEmptyClientInfo();
-			if (NULL == pClientInfo)
+
+			LOG_INFO("RUNNING");
+			auto curTimeSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
+			for (auto client : mClientInfos)
 			{
-				LOG_ERROR("Client Full");
-				return;
+				if (client->IsConnected()) continue;
+
+				if ((UINT64)curTimeSec < client->GetLatestClosedTimeSec()) continue;
+
+				auto diff = curTimeSec - client->GetLatestClosedTimeSec();
+				if (diff <= RE_USE_SESSION_WAIT_TIMESEC) continue;
+
+				client->PostAccept(mListenSocket, curTimeSec);
 			}
 
-			// Wait until client connect request
-			auto newSocket = accept(mListenSocket, (SOCKADDR*)&clientAddr, &addrLen);
-			if (INVALID_SOCKET == newSocket)
-			{
-				continue;
-			}
-
-			if (false == pClientInfo->OnConnect(mIOCPHandle, newSocket))
-			{
-				pClientInfo->Close(true);
-				return;
-			}
-
-			// char clientIP[32] = { 0, };
-			// Client's IPv4 -> string (for Debug)
-			// inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIP, 32 - 1);
-
-			OnConnected(pClientInfo->m_index);
-			mClientCnt++;
+			std::this_thread::sleep_for(std::chrono::milliseconds(32));
 		}
 	}
 
@@ -315,7 +335,9 @@ private:
 
 	std::thread mSenderThread;
 
-	HANDLE mIOCPHandle = INVALID_HANDLE_VALUE;
+	HANDLE mIOCPHandle = INVALID_HANDLE_VALUE; 
+	
+	LPFN_ACCEPTEX m_lpfnAcceptEx;
 
 	bool mIsWorkerRun = false;
 

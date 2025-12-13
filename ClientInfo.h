@@ -9,7 +9,16 @@ class ClientInfo
 {
 public:
 	UINT32 m_index;
+	HANDLE m_iocpHandle = INVALID_HANDLE_VALUE;
 	SOCKET m_socketClient;
+
+	INT64 m_isConnected = 0;
+	UINT64 m_LatestClosedTimeSec = 0;
+
+	LPFN_ACCEPTEX m_lpfnAcceptEx;
+	OverlappedEx m_acceptContext;
+	char m_AcceptBuf[64];
+
 	OverlappedEx m_recvOv;
 	OverlappedEx m_sendOv;
 
@@ -18,17 +27,21 @@ public:
 	std::mutex m_sendLock;
 	std::queue<OverlappedEx*> m_sendDataQueue;
 
-	ClientInfo()
+	ClientInfo(LPFN_ACCEPTEX lpfnAcceptEx)
 	{
 		ZeroMemory(&m_recvOv, sizeof(OverlappedEx));
 		ZeroMemory(&m_sendOv, sizeof(OverlappedEx));
 		m_socketClient = INVALID_SOCKET;
 	}
 
-	bool IsConnected() { return m_socketClient != INVALID_SOCKET; }
+	bool IsConnected() { return m_isConnected == 1; }
+
+	UINT64 GetLatestClosedTimeSec() { return 0; }
 
 	bool OnConnect(HANDLE iocpHandle, SOCKET clientSocket)
 	{
+		m_isConnected = 1;
+		m_iocpHandle = iocpHandle;
 		m_socketClient = clientSocket;
 		auto hIOCP = CreateIoCompletionPort((HANDLE)clientSocket
 											, iocpHandle
@@ -41,6 +54,24 @@ public:
 		}
 
 		return BindRecv();
+	}
+
+	bool AcceptCompletion()
+	{
+		printf_s("AcceptCompletion : SessionIndex(%d)\n", m_index);
+
+		if (OnConnect(m_iocpHandle, m_socketClient) == false)
+		{
+			return false;
+		}
+
+		SOCKADDR_IN		stClientAddr;
+		int nAddrLen = sizeof(SOCKADDR_IN);
+		char clientIP[32] = { 0, };
+		inet_ntop(AF_INET, &(stClientAddr.sin_addr), clientIP, 32 - 1);
+		printf("클라이언트 접속 : IP(%s) SOCKET(%d)\n", clientIP, (int)m_socketClient);
+
+		return true;
 	}
 
 	void Close(bool isForce) 
@@ -57,9 +88,45 @@ public:
 
 		setsockopt(m_socketClient, SOL_SOCKET, SO_LINGER, (char*)&stLinger, sizeof(stLinger));
 
+		m_isConnected = 0;
+		m_LatestClosedTimeSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 		closesocket(m_socketClient);
 
 		m_socketClient = INVALID_SOCKET;
+	}
+
+	bool PostAccept(SOCKET listenSocket, UINT64 curTimeSec)
+	{
+		m_LatestClosedTimeSec = UINT32_MAX;
+
+		m_socketClient = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_IP,
+								   NULL, 0, WSA_FLAG_OVERLAPPED);
+		if (INVALID_SOCKET == m_socketClient)
+		{
+			LOG_ERROR("Client Socket WSASocket Error");
+			return false;
+		}
+
+		ZeroMemory(&m_acceptContext, sizeof(OverlappedEx));
+
+		DWORD bytes = 0;
+		DWORD flags = 0;
+		m_acceptContext.m_wsaBuf.len = 0;
+		m_acceptContext.m_wsaBuf.buf = nullptr;
+		m_acceptContext.m_eOperation = IOOperation::ACCEPT;
+		m_acceptContext.m_sessionIndex = m_index;
+
+		if (FALSE == m_lpfnAcceptEx(listenSocket, m_socketClient, m_AcceptBuf, 0,
+							  sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &bytes, (LPWSAOVERLAPPED) & (m_acceptContext)))
+		{
+			if (WSAGetLastError() != WSA_IO_PENDING)
+			{
+				LOG_ERROR("AcceptEx Error :");
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	bool BindRecv() 
