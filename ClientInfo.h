@@ -15,39 +15,37 @@ public:
 	INT64 m_isConnected = 0;
 	UINT64 m_LatestClosedTimeSec = 0;
 
-	LPFN_ACCEPTEX m_lpfnAcceptEx;
 	OverlappedEx m_acceptContext;
 	char m_AcceptBuf[64];
 
 	OverlappedEx m_recvOv;
-	OverlappedEx m_sendOv;
 
 	char m_recvBuf[MAX_SOCKBUF];
 
 	std::mutex m_sendLock;
 	std::queue<OverlappedEx*> m_sendDataQueue;
 
-	ClientInfo(LPFN_ACCEPTEX lpfnAcceptEx)
+	ClientInfo()
 	{
 		ZeroMemory(&m_recvOv, sizeof(OverlappedEx));
-		ZeroMemory(&m_sendOv, sizeof(OverlappedEx));
 		m_socketClient = INVALID_SOCKET;
 	}
 
 	bool IsConnected() { return m_isConnected == 1; }
 
-	UINT64 GetLatestClosedTimeSec() { return 0; }
+	UINT64 GetLatestClosedTimeSec() { return m_LatestClosedTimeSec; }
 
 	bool OnConnect(HANDLE iocpHandle, SOCKET clientSocket)
 	{
+		LOG_INFO("ON CONNECTED");
+
 		m_isConnected = 1;
-		m_iocpHandle = iocpHandle;
 		m_socketClient = clientSocket;
 		auto hIOCP = CreateIoCompletionPort((HANDLE)clientSocket
 											, iocpHandle
 											, (ULONG_PTR)(this), 0);
 
-		if (NULL == hIOCP || iocpHandle != hIOCP)
+		if (INVALID_HANDLE_VALUE == hIOCP)
 		{
 			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", GetLastError()));
 			return false;
@@ -97,10 +95,13 @@ public:
 
 	bool PostAccept(SOCKET listenSocket, UINT64 curTimeSec)
 	{
+		LOG_INFO(std::format("PostAccept.client Index : {}", m_index));
+
 		m_LatestClosedTimeSec = UINT32_MAX;
 
 		m_socketClient = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_IP,
 								   NULL, 0, WSA_FLAG_OVERLAPPED);
+
 		if (INVALID_SOCKET == m_socketClient)
 		{
 			LOG_ERROR("Client Socket WSASocket Error");
@@ -116,7 +117,7 @@ public:
 		m_acceptContext.m_eOperation = IOOperation::ACCEPT;
 		m_acceptContext.m_sessionIndex = m_index;
 
-		if (FALSE == m_lpfnAcceptEx(listenSocket, m_socketClient, m_AcceptBuf, 0,
+		if (FALSE == AcceptEx(listenSocket, m_socketClient, m_AcceptBuf, 0,
 							  sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16, &bytes, (LPWSAOVERLAPPED) & (m_acceptContext)))
 		{
 			if (WSAGetLastError() != WSA_IO_PENDING)
@@ -212,4 +213,25 @@ public:
 			SendIO();
 		}
 	}
+
+	bool SetSocketOption()
+	{
+
+		int opt = 1;
+		if (SOCKET_ERROR == setsockopt(m_socketClient, IPPROTO_TCP, TCP_NODELAY, (const char*)&opt, sizeof(int)))
+		{
+			printf_s("[DEBUG] TCP_NODELAY error: %d\n", GetLastError());
+			return false;
+		}
+
+		opt = 0;
+		if (SOCKET_ERROR == setsockopt(m_socketClient, SOL_SOCKET, SO_RCVBUF, (const char*)&opt, sizeof(int)))
+		{
+			printf_s("[DEBUG] SO_RCVBUF change error: %d\n", GetLastError());
+			return false;
+		}
+
+		return true;
+	}
+
 };

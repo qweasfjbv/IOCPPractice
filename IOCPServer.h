@@ -39,21 +39,6 @@ public:
 			return false;
 		}
 
-		GUID guidAcceptEx = WSAID_ACCEPTEX;
-		DWORD bytes = 0;
-
-		WSAIoctl(
-			mListenSocket,
-			SIO_GET_EXTENSION_FUNCTION_POINTER,
-			&guidAcceptEx,
-			sizeof(guidAcceptEx),
-			&m_lpfnAcceptEx,
-			sizeof(m_lpfnAcceptEx),
-			&bytes,
-			nullptr,
-			nullptr
-		);
-
 		LOG_INFO("Init Socket Success!");
 		return true;
 	}
@@ -80,6 +65,20 @@ public:
 			return false;
 		}
 
+		mIOCPHandle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, MAX_WORKERTHREAD);
+		if (NULL == mIOCPHandle)
+		{
+			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", WSAGetLastError()));
+			return false;
+		}
+
+		auto hIOCPHandle = CreateIoCompletionPort((HANDLE)mListenSocket, mIOCPHandle, (UINT32)0, 0);
+		if (nullptr == hIOCPHandle)
+		{
+			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", WSAGetLastError()));
+			return false;
+		}
+
 		LOG_INFO("Server Register Success!");
 		return true;
 	}
@@ -87,13 +86,6 @@ public:
 	bool StartServer(const UINT32 maxClientCount)
 	{
 		CreateClient(maxClientCount);
-
-		mIOCPHandle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, NULL, MAX_WORKERTHREAD);
-		if (NULL == mIOCPHandle)
-		{
-			LOG_ERROR(std::format("CreateIoCompletionPort() Failed. : {}", WSAGetLastError()));
-			return false;
-		}
 
 		bool bRet = CreateWorkerThread();
 		if (!bRet) return false;
@@ -151,8 +143,9 @@ private:
 	{
 		for (UINT32 i = 0; i < maxClientCount; i++)
 		{
-			auto client = new ClientInfo(m_lpfnAcceptEx);
+			auto client = new ClientInfo();
 			client->m_index = i;
+			client->m_iocpHandle = mIOCPHandle;
 			mClientInfos.push_back(client);
 		}
 	}
@@ -229,18 +222,18 @@ private:
 				continue;
 			}
 
-			// If client disconnects
-			if (FALSE == isSuccess || (0 == ioSize && TRUE == isSuccess))
+			OverlappedEx* pOverlappedEx = (OverlappedEx*)lpOverlapped;
+	
+			if (FALSE == isSuccess || (0 == ioSize && IOOperation::ACCEPT != pOverlappedEx->m_eOperation))
 			{
-				LOG_WARNING(std::format("socket({}) disconnected.", (int)pClientInfo->m_socketClient));
 				CloseSocket(pClientInfo);
 				continue;
 			}
 
-			OverlappedEx* pOverlappedEx = (OverlappedEx*)lpOverlapped;
 
 			if (IOOperation::ACCEPT == pOverlappedEx->m_eOperation)
 			{
+
 				pClientInfo = GetClientInfo(pOverlappedEx->m_sessionIndex);
 				if (pClientInfo->AcceptCompletion())
 				{
@@ -277,8 +270,6 @@ private:
 
 		while (mIsAccepterRun)
 		{
-
-			LOG_INFO("RUNNING");
 			auto curTimeSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
 			for (auto client : mClientInfos)
@@ -336,8 +327,6 @@ private:
 	std::thread mSenderThread;
 
 	HANDLE mIOCPHandle = INVALID_HANDLE_VALUE; 
-	
-	LPFN_ACCEPTEX m_lpfnAcceptEx;
 
 	bool mIsWorkerRun = false;
 
